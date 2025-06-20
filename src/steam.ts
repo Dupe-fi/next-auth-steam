@@ -15,21 +15,27 @@ import {
 import { claimIdentity } from './utils/openid'
 
 export interface SteamProfile extends Record<string, any> {
+  // These will always be present regardless of the endpoint being hit
   steamid: string
-  communityvisibilitystate: CommunityVisibilityState
-  profilestate: number
   personaname: string
   profileurl: string
   avatar: string
   avatarmedium: string
   avatarfull: string
   avatarhash: string
-  lastlogoff: number
-  personastate: PersonaState
-  primaryclanid: string
-  timecreated: number
-  personastateflags: number
-  commentpermission: boolean
+
+  // these may not be present if the alternative resolver endpoiint is hit
+  communityvisibilitystate?: CommunityVisibilityState
+  profilestate?: number
+  lastlogoff?: number
+  personastate?: PersonaState
+  primaryclanid?: string
+  timecreated?: number
+  personastateflags?: number
+  commentpermission?: boolean
+  loccountrycode?: string
+  locstatecode?: string
+  loccityid?: number
 }
 
 export interface SteamProviderOptions<P>
@@ -37,7 +43,7 @@ export interface SteamProviderOptions<P>
   /**
    * Obtain the key here: [Obtaining Steam Web API Key](https://steamcommunity.com/dev/apikey)
    */
-  clientSecret: string
+  clientSecret?: string
   /**
    * If `callbackUrl` is not provided, the default value from `process.env.NEXTAUTH_URL` is computed and used.
    * **Trailing slash must be removed**.
@@ -45,6 +51,7 @@ export interface SteamProviderOptions<P>
    * @example 'https://example.com/api/auth/callback'
    */
   callbackUrl?: string
+  resolveEndpoint?: string
 }
 
 export function Steam<P extends SteamProfile>(
@@ -60,10 +67,10 @@ export function Steam<P extends SteamProfile>(
   const realm = callbackUrl.origin
   const returnTo = `${callbackUrl.href}/${STEAM_PROVIDER_ID}`
 
-  if (!options.clientSecret || options.clientSecret.length < 1) {
+  if (!options.resolveEndpoint && (!options.clientSecret || options.clientSecret.length < 1)) {
     throw new Error(
       "Steam provider's `clientSecret` is empty. You can obtain an API key here: https://steamcommunity.com/dev/apikey"
-    )
+    ) /* :contentReference[oaicite:0]{index=0} */
   }
 
   return {
@@ -112,14 +119,23 @@ export function Steam<P extends SteamProfile>(
     },
     userinfo: {
       async request(ctx) {
-        const url = new URL('https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002')
+        const base =
+          (ctx.provider as { resolveEndpoint?: string }).resolveEndpoint ??
+          'https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002'
 
-        url.searchParams.set('key', ctx.provider.clientSecret as string)
+        const url = new URL(base)
         url.searchParams.set('steamids', ctx.tokens.steamId as string)
 
-        const response = await fetch(url)
-        const data = await response.json()
+        if (base.startsWith('https://api.steampowered.com')) {
+          url.searchParams.set('key', ctx.provider.clientSecret as string)
+        }
 
+        const res = await fetch(url)
+        if (!res.ok) {
+          throw new Error(`Steam profile fetch failed with status ${res.status}`)
+        }
+
+        const data = await res.json()
         return data.response.players[0]
       }
     },
